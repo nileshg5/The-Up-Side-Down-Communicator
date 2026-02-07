@@ -2,8 +2,8 @@ package com.example.theupsidedowncommunicator.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val RetroGreen = Color(0xFF00FF66)
-val RetroAmber = Color(0xFFFFB000)
+val RetroTeal = Color(0xFF344949)
+val RetroCyan = Color(0xFF89A9A9)
 val RetroBlack = Color(0xFF0D0D0D)
 val RetroRed = Color(0xFFFF0033)
 

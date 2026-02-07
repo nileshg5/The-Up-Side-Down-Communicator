@@ -2,6 +2,7 @@ package com.example.theupsidedowncommunicator
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.*
@@ -10,8 +11,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -20,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextStyle
@@ -29,10 +33,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.theupsidedowncommunicator.ui.theme.RetroBlack
-import com.example.theupsidedowncommunicator.ui.theme.RetroGreen
+import com.example.theupsidedowncommunicator.ui.theme.RetroCyan
 import com.example.theupsidedowncommunicator.ui.theme.RetroRed
+import com.example.theupsidedowncommunicator.ui.theme.RetroTeal
 import com.example.theupsidedowncommunicator.ui.theme.TheUpsideDownCommunicatorTheme
 import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.*
 import kotlin.random.Random
 
 class MainActivity : ComponentActivity() {
@@ -51,12 +58,39 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun DimensionDecoderApp() {
-    var screen by remember { mutableStateOf("INPUT") }
+    var screen by remember { mutableStateOf("LOGIN") }
+    var currentUserId by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
     var selectedMode by remember { mutableStateOf(EncodeMode.MORSE) }
     var sanity by remember { mutableStateOf(100f) }
     var isPossessed by remember { mutableStateOf(false) }
     var binaryData by remember { mutableStateOf(listOf<String>()) }
+    var playbackMode by remember { mutableStateOf(EncodeMode.MORSE) }
+    
+    var broadcastMessages by remember { mutableStateOf(listOf<MessageRecord>()) }
+
+    // Background Flicker Animation
+    val infiniteTransition = rememberInfiniteTransition(label = "bg_flicker")
+    val bgAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.95f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(100, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "bg_alpha"
+    )
+
+    // Handle Back Button
+    BackHandler(enabled = screen != "LOGIN" || isPossessed) {
+        if (isPossessed) {
+            // Cannot escape possession via back button
+        } else if (screen == "INPUT") {
+            screen = "LOGIN"
+        } else {
+            screen = "INPUT"
+        }
+    }
 
     // Sanity Drain
     LaunchedEffect(isPossessed) {
@@ -70,31 +104,72 @@ fun DimensionDecoderApp() {
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    // Global Listener for Broadcasts
+    LaunchedEffect(Unit) {
+        FirebaseMessaging.fetchBroadcasts { list ->
+            broadcastMessages = list
+        }
+    }
+
+    Box(modifier = Modifier
+        .fillMaxSize()
+        .background(RetroBlack.copy(alpha = bgAlpha))
+        .drawBehind {
+            drawRect(
+                Brush.radialGradient(
+                    colors = listOf(RetroTeal.copy(alpha = 0.3f), Color.Transparent),
+                    center = center,
+                    radius = size.maxDimension / 1.5f
+                )
+            )
+        }
+    ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            Header(sanity)
+            Header(
+                sanity = sanity, 
+                showBack = screen != "LOGIN" && screen != "INPUT",
+                onBack = { screen = "INPUT" },
+                userId = currentUserId,
+                onBroadcastClick = { screen = "BROADCAST" }
+            )
             
             Box(modifier = Modifier.weight(1f)) {
                 when (screen) {
+                    "LOGIN" -> LoginScreen { id ->
+                        currentUserId = id
+                        screen = "INPUT"
+                    }
                     "INPUT" -> InputScreen(
                         message = message,
                         onMessageChange = { message = it },
                         selectedMode = selectedMode,
                         onModeSelected = { selectedMode = it },
                         onTransmit = {
+                            FirebaseMessaging.sendBroadcast(currentUserId, message, selectedMode)
                             binaryData = DimensionLogic.encryptMessage(message)
+                            playbackMode = selectedMode
+                            screen = "PLAYBACK"
+                        },
+                        onGoToBroadcast = { screen = "BROADCAST" }
+                    )
+                    "BROADCAST" -> BroadcastScreen(
+                        messages = broadcastMessages,
+                        onPlaySignal = { msg ->
+                            binaryData = DimensionLogic.encryptMessage(msg.content)
+                            playbackMode = EncodeMode.valueOf(msg.mode)
                             screen = "PLAYBACK"
                         }
                     )
                     "PLAYBACK" -> PlaybackScreen(
                         binaryData = binaryData,
-                        mode = selectedMode,
-                        onFinished = { screen = "INPUT" }
+                        mode = playbackMode,
+                        onFinished = { screen = "BROADCAST" }
                     )
                 }
             }
         }
 
+        StaticNoiseOverlay()
         ScanlineOverlay()
 
         if (isPossessed) {
@@ -107,7 +182,35 @@ fun DimensionDecoderApp() {
 }
 
 @Composable
-fun Header(sanity: Float) {
+fun LoginScreen(onLogin: (String) -> Unit) {
+    var id by remember { mutableStateOf("") }
+    Column(
+        modifier = Modifier.fillMaxSize().padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text("> IDENTIFY YOURSELF:", color = RetroCyan, fontFamily = FontFamily.Monospace)
+        Spacer(modifier = Modifier.height(16.dp))
+        BasicTextField(
+            value = id,
+            onValueChange = { id = it },
+            textStyle = TextStyle(color = RetroCyan, fontFamily = FontFamily.Monospace, fontSize = 24.sp, textAlign = TextAlign.Center),
+            modifier = Modifier.fillMaxWidth().border(1.dp, RetroCyan).padding(16.dp),
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(RetroCyan)
+        )
+        Spacer(modifier = Modifier.height(32.dp))
+        Text(
+            "CONNECT",
+            modifier = Modifier.clickable { if(id.isNotEmpty()) onLogin(id) }.padding(16.dp),
+            color = RetroCyan,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+@Composable
+fun Header(sanity: Float, showBack: Boolean = false, onBack: () -> Unit = {}, userId: String = "", onBroadcastClick: () -> Unit = {}) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -115,13 +218,41 @@ fun Header(sanity: Float) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            "DIMENSION DECODER v1983",
-            color = RetroGreen,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold
-        )
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (showBack) {
+                    Text(
+                        "< BACK ",
+                        modifier = Modifier.clickable { onBack() }.padding(end = 8.dp),
+                        color = RetroCyan,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Text(
+                    "DIMENSION DECODER v1983",
+                    color = RetroCyan,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (userId.isNotEmpty()) {
+                    Text("ID: $userId", color = RetroCyan.copy(alpha = 0.5f), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    "[ BROADCAST FEED ]",
+                    modifier = Modifier.clickable { onBroadcastClick() },
+                    color = RetroCyan,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
+                )
+            }
+        }
         
         SanityMeter(sanity)
     }
@@ -130,19 +261,19 @@ fun Header(sanity: Float) {
 @Composable
 fun SanityMeter(sanity: Float) {
     Column(horizontalAlignment = Alignment.End) {
-        Text("SANITY", color = RetroGreen, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
+        Text("SANITY", color = RetroCyan, fontSize = 8.sp, fontFamily = FontFamily.Monospace)
         Box(
             modifier = Modifier
                 .width(100.dp)
                 .height(10.dp)
-                .border(1.dp, RetroGreen)
+                .border(1.dp, RetroCyan)
                 .padding(1.dp)
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxHeight()
                     .fillMaxWidth(sanity / 100f)
-                    .background(if (sanity < 30) RetroRed else RetroGreen)
+                    .background(if (sanity < 30) RetroRed else RetroCyan)
             )
         }
     }
@@ -154,59 +285,98 @@ fun InputScreen(
     onMessageChange: (String) -> Unit,
     selectedMode: EncodeMode,
     onModeSelected: (EncodeMode) -> Unit,
-    onTransmit: () -> Unit
+    onTransmit: () -> Unit,
+    onGoToBroadcast: () -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(
-            "> ENTER MESSAGE FOR THE VOID:",
-            color = RetroGreen,
-            fontFamily = FontFamily.Monospace
-        )
+        Spacer(modifier = Modifier.height(80.dp))
         
+        Text("> BROADCAST MESSAGE:", color = RetroCyan, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
         BasicTextField(
             value = message,
             onValueChange = onMessageChange,
-            textStyle = TextStyle(color = RetroGreen, fontFamily = FontFamily.Monospace, fontSize = 20.sp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(100.dp)
-                .border(1.dp, RetroGreen)
-                .padding(8.dp),
-            cursorBrush = androidx.compose.ui.graphics.SolidColor(RetroGreen)
+            textStyle = TextStyle(color = RetroCyan, fontFamily = FontFamily.Monospace, fontSize = 20.sp, textAlign = TextAlign.Center),
+            modifier = Modifier.fillMaxWidth().border(1.dp, RetroCyan).padding(12.dp),
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(RetroCyan),
+            decorationBox = { innerTextField ->
+                Box(contentAlignment = Alignment.Center) {
+                    if (message.isEmpty()) Text("TYPE MESSAGE...", color = RetroCyan.copy(alpha = 0.2f))
+                    innerTextField()
+                }
+            }
         )
 
-        Text("> SELECT SIGNAL MODE:", color = RetroGreen, fontFamily = FontFamily.Monospace)
-        
-        EncodeMode.values().forEach { mode ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onModeSelected(mode) }
-                    .padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    if (selectedMode == mode) "[X] $mode" else "[ ] $mode",
-                    color = RetroGreen,
-                    fontFamily = FontFamily.Monospace
-                )
+        Text("> SIGNAL TYPE:", color = RetroCyan, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            EncodeMode.values().forEach { mode ->
+                Box(
+                    modifier = Modifier
+                        .border(1.dp, if (selectedMode == mode) RetroCyan else RetroCyan.copy(alpha = 0.3f))
+                        .clickable { onModeSelected(mode) }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text(mode.name, color = if (selectedMode == mode) RetroCyan else RetroCyan.copy(alpha = 0.3f), fontSize = 10.sp)
+                }
             }
         }
 
         Spacer(modifier = Modifier.weight(1f))
 
-        Button(
-            onClick = onTransmit,
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = RetroGreen, contentColor = RetroBlack),
-            shape = androidx.compose.ui.graphics.RectangleShape
-        ) {
-            Text("TRANSMIT", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+        Text(
+            "TRANSMIT TO ALL",
+            modifier = Modifier.clickable { onTransmit() }.padding(16.dp),
+            color = RetroCyan,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            fontSize = 20.sp
+        )
+        
+        Text(
+            "[ VIEW ALL BROADCASTS ]",
+            modifier = Modifier.clickable { onGoToBroadcast() }.padding(8.dp),
+            color = RetroCyan.copy(alpha = 0.7f),
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp
+        )
+    }
+}
+
+@Composable
+fun BroadcastScreen(
+    messages: List<MessageRecord>,
+    onPlaySignal: (MessageRecord) -> Unit
+) {
+    val dateFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Text("> GLOBAL BROADCAST FEED (ALL USERS):", color = RetroCyan, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
+        Spacer(modifier = Modifier.height(16.dp))
+        
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(messages) { msg ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, RetroCyan.copy(alpha = 0.3f))
+                        .clickable { onPlaySignal(msg) }
+                        .padding(12.dp)
+                ) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Column {
+                            Text(msg.from, color = RetroCyan, fontFamily = FontFamily.Monospace, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            Text("SIGNAL: ${msg.mode}", color = RetroCyan.copy(alpha = 0.6f), fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                        }
+                        Text(dateFormat.format(Date(msg.timestamp)), color = RetroCyan.copy(alpha = 0.4f), fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
         }
     }
 }
@@ -231,7 +401,7 @@ fun PlaybackScreen(
                 active = false
                 delay(150)
             }
-            delay(500) // Byte gap
+            delay(500)
         }
         onFinished()
     }
@@ -239,92 +409,72 @@ fun PlaybackScreen(
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         when (mode) {
             EncodeMode.MORSE -> {
-                Canvas(modifier = Modifier.size(150.dp)) {
-                    if (active) {
-                        drawCircle(color = RetroGreen, radius = if (currentBit == '1') 75.dp.toPx() else 40.dp.toPx())
-                    }
+                Canvas(modifier = Modifier.size(100.dp)) {
+                    if (active) drawCircle(color = RetroCyan, radius = if (currentBit == '1') 50.dp.toPx() else 20.dp.toPx(), alpha = 0.8f)
                 }
             }
             EncodeMode.COLOR -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(if (active) (if (currentBit == '1') RetroRed else RetroGreen) else RetroBlack)
-                )
+                Box(modifier = Modifier.fillMaxSize().background(if (active) (if (currentBit == '1') RetroRed.copy(alpha = 0.5f) else RetroCyan.copy(alpha = 0.5f)) else Color.Transparent))
             }
             EncodeMode.BEEP -> {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        if (active) "((( BEEP )))" else "...",
-                        color = RetroGreen,
-                        fontSize = 24.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
+                Text(if (active) "POISON ON\nTHE INSIDE" else "", color = RetroCyan, fontSize = 24.sp, fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center)
             }
             EncodeMode.GRID -> {
-                if (active) {
-                    SymbolGrid(currentChunk)
-                }
+                if (active) SymbolGrid(currentChunk)
             }
         }
-        
-        Text(
-            "TRANSMITTING...",
-            modifier = Modifier.align(Alignment.BottomCenter).padding(32.dp),
-            color = RetroGreen,
-            fontFamily = FontFamily.Monospace
-        )
     }
 }
 
 @Composable
 fun SymbolGrid(chunk: String) {
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(3),
-        modifier = Modifier.size(180.dp),
-        contentPadding = PaddingValues(8.dp)
-    ) {
-        items(9) { index ->
-            // Use bits of chunk to light up grid (up to 8 bits)
-            val isLit = if (index < chunk.length) chunk[index] == '1' else false
-            Box(
-                modifier = Modifier
-                    .padding(4.dp)
-                    .aspectRatio(1f)
-                    .background(if (isLit) RetroGreen else Color.Transparent)
-                    .border(1.dp, RetroGreen)
-            )
+    Box(modifier = Modifier.fillMaxSize()) {
+        StaticPatternRow(modifier = Modifier.align(Alignment.TopCenter).padding(top = 40.dp))
+        StaticPatternRow(modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp))
+    }
+}
+
+@Composable
+fun StaticPatternRow(modifier: Modifier = Modifier) {
+    val seed = remember { Random.nextInt() }
+    Canvas(modifier = modifier.fillMaxWidth().height(60.dp)) {
+        val rows = 4
+        val cols = 40
+        val cellW = size.width / cols
+        val cellH = size.height / rows
+        val rand = Random(seed)
+        for (r in 0 until rows) {
+            for (c in 0 until cols) {
+                if (rand.nextBoolean()) {
+                    drawRect(color = RetroCyan.copy(alpha = 0.6f), topLeft = Offset(c * cellW, r * cellH), size = androidx.compose.ui.geometry.Size(cellW * 0.8f, cellH * 0.6f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun StaticNoiseOverlay() {
+    val infiniteTransition = rememberInfiniteTransition(label = "noise")
+    val offset by infiniteTransition.animateFloat(initialValue = 0f, targetValue = 100f, animationSpec = infiniteRepeatable(animation = tween(100, easing = LinearEasing), repeatMode = RepeatMode.Restart), label = "offset")
+    Canvas(modifier = Modifier.fillMaxSize().alpha(0.1f)) {
+        val rand = Random(offset.toInt())
+        for (i in 0..500) {
+            drawCircle(color = RetroCyan, radius = 1f, center = Offset(rand.nextFloat() * size.width, rand.nextFloat() * size.height))
         }
     }
 }
 
 @Composable
 fun ScanlineOverlay() {
-    Canvas(modifier = Modifier.fillMaxSize().alpha(0.15f)) {
-        val lineSpacing = 4.dp.toPx()
+    Canvas(modifier = Modifier.fillMaxSize().alpha(0.2f)) {
+        val lineSpacing = 3.dp.toPx()
         for (y in 0..size.height.toInt() step lineSpacing.toInt()) {
-            drawLine(
-                color = Color.Black,
-                start = Offset(0f, y.toFloat()),
-                end = Offset(size.width, y.toFloat()),
-                strokeWidth = 2f
-            )
+            drawLine(color = Color.Black, start = Offset(0f, y.toFloat()), end = Offset(size.width, y.toFloat()), strokeWidth = 1.5f)
         }
     }
-    
-    // Flicker effect
     val infiniteTransition = rememberInfiniteTransition(label = "flicker")
-    val flickerAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.02f,
-        targetValue = 0.08f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(50, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "alpha"
-    )
-    
+    val flickerAlpha by infiniteTransition.animateFloat(initialValue = 0.01f, targetValue = 0.04f, animationSpec = infiniteRepeatable(animation = tween(40, easing = LinearEasing), repeatMode = RepeatMode.Reverse), label = "alpha")
     Box(modifier = Modifier.fillMaxSize().background(Color.White.copy(alpha = flickerAlpha)))
 }
 
@@ -332,69 +482,27 @@ fun ScanlineOverlay() {
 fun PossessedOverlay(onRecovered: () -> Unit) {
     var konamiInput by remember { mutableStateOf(listOf<String>()) }
     val konamiCode = listOf("UP", "UP", "DOWN", "DOWN", "LEFT", "RIGHT", "LEFT", "RIGHT", "B", "A")
-    
     val shakeTransition = rememberInfiniteTransition(label = "shake")
-    val shakeOffset by shakeTransition.animateFloat(
-        initialValue = -5f,
-        targetValue = 5f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(30, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "offset"
-    )
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(RetroRed.copy(alpha = 0.3f))
-            .graphicsLayer(translationX = shakeOffset, translationY = shakeOffset)
-            .drawBehind {
-                // Glitch lines
-                for (i in 0..10) {
-                    val y = Random.nextFloat() * size.height
-                    drawLine(
-                        RetroRed,
-                        Offset(0f, y),
-                        Offset(size.width, y + Random.nextFloat() * 20),
-                        strokeWidth = Random.nextFloat() * 10
-                    )
-                }
-            }
-            .clickable(enabled = false) {} // Intercept clicks
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(
-                "DIMENSIONAL INTERFERENCE DETECTED",
-                color = Color.White,
-                fontSize = 24.sp,
-                textAlign = TextAlign.Center,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.ExtraBold,
-                modifier = Modifier.padding(16.dp)
-            )
-            
-            Spacer(modifier = Modifier.height(32.dp))
-            
-            // D-Pad for recovery
-            Text("RESTORE CONNECTION SEQUENCE:", color = Color.White, fontFamily = FontFamily.Monospace)
-            Spacer(modifier = Modifier.height(16.dp))
-            
+    val shakeOffset by shakeTransition.animateFloat(initialValue = -8f, targetValue = 8f, animationSpec = infiniteRepeatable(animation = tween(20, easing = LinearEasing), repeatMode = RepeatMode.Reverse), label = "offset")
+    Box(modifier = Modifier.fillMaxSize().background(RetroRed.copy(alpha = 0.2f)).graphicsLayer(translationX = shakeOffset, translationY = shakeOffset).drawBehind {
+        for (i in 0..15) {
+            val y = Random.nextFloat() * size.height
+            drawLine(RetroRed.copy(alpha = 0.5f), Offset(0f, y), Offset(size.width, y + Random.nextFloat() * 10), strokeWidth = Random.nextFloat() * 8)
+        }
+    }.clickable(enabled = false) {}) {
+        Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Text("SYSTEM COMPROMISED", color = Color.White, fontSize = 24.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(48.dp))
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 RecoveryButton("UP") { konamiInput = (konamiInput + "UP").takeLast(10) }
                 Row {
                     RecoveryButton("LEFT") { konamiInput = (konamiInput + "LEFT").takeLast(10) }
-                    Spacer(modifier = Modifier.width(48.dp))
+                    Spacer(modifier = Modifier.width(32.dp))
                     RecoveryButton("RIGHT") { konamiInput = (konamiInput + "RIGHT").takeLast(10) }
                 }
                 RecoveryButton("DOWN") { konamiInput = (konamiInput + "DOWN").takeLast(10) }
             }
-            
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(24.dp))
             Row {
                 RecoveryButton("B") { konamiInput = (konamiInput + "B").takeLast(10) }
                 Spacer(modifier = Modifier.width(16.dp))
@@ -402,22 +510,12 @@ fun PossessedOverlay(onRecovered: () -> Unit) {
             }
         }
     }
-    
-    LaunchedEffect(konamiInput) {
-        if (konamiInput == konamiCode) {
-            onRecovered()
-        }
-    }
+    LaunchedEffect(konamiInput) { if (konamiInput == konamiCode) onRecovered() }
 }
 
 @Composable
 fun RecoveryButton(label: String, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = RetroRed),
-        shape = androidx.compose.ui.graphics.RectangleShape,
-        modifier = Modifier.padding(4.dp)
-    ) {
-        Text(label, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+    Box(modifier = Modifier.padding(4.dp).border(1.dp, Color.White).clickable { onClick() }.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text(label, color = Color.White, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
     }
 }

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "180000768496",
+    "project_id": "communicator5555",
+    "storage_bucket": "communicator5555.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:180000768496:android:e33bc11ebabd14d6b65d35",
+        "android_client_info": {
+          "package_name": "com.example.theupsidedowncommunicator"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAwkLYrwysGeDYj4GJuXbSBTdVZk_lfshc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
