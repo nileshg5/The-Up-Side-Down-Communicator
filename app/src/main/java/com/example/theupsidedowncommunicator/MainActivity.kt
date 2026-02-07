@@ -1,5 +1,7 @@
 package com.example.theupsidedowncommunicator
 
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -43,22 +45,29 @@ import java.util.*
 import kotlin.random.Random
 
 class MainActivity : ComponentActivity() {
+    private val toneGenerator by lazy { ToneGenerator(AudioManager.STREAM_MUSIC, 100) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             TheUpsideDownCommunicatorTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = RetroBlack) {
-                    DimensionDecoderApp()
+                    DimensionDecoderApp(toneGenerator)
                 }
             }
         }
     }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        toneGenerator.release()
+    }
 }
 
 @Composable
-fun DimensionDecoderApp() {
-    var screen by remember { mutableStateOf("LOGIN") }
+fun DimensionDecoderApp(toneGenerator: ToneGenerator) {
+    var screen by remember { mutableStateOf("STARTUP") }
     var currentUserId by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
     var selectedMode by remember { mutableStateOf(EncodeMode.MORSE) }
@@ -82,13 +91,21 @@ fun DimensionDecoderApp() {
     )
 
     // Handle Back Button
-    BackHandler(enabled = screen != "LOGIN" || isPossessed) {
+    BackHandler(enabled = screen != "LOGIN" && screen != "STARTUP" || isPossessed) {
         if (isPossessed) {
             // Cannot escape possession via back button
         } else if (screen == "INPUT") {
             screen = "LOGIN"
         } else {
             screen = "INPUT"
+        }
+    }
+
+    // Startup Delay
+    LaunchedEffect(Unit) {
+        if (screen == "STARTUP") {
+            delay(2000)
+            screen = "LOGIN"
         }
     }
 
@@ -124,53 +141,59 @@ fun DimensionDecoderApp() {
             )
         }
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            Header(
-                sanity = sanity, 
-                showBack = screen != "LOGIN" && screen != "INPUT",
-                onBack = { screen = "INPUT" },
-                userId = currentUserId,
-                onBroadcastClick = { screen = "BROADCAST" }
-            )
-            
-            Box(modifier = Modifier.weight(1f)) {
-                when (screen) {
-                    "LOGIN" -> LoginScreen { id ->
-                        currentUserId = id
-                        screen = "INPUT"
-                    }
-                    "INPUT" -> InputScreen(
-                        message = message,
-                        onMessageChange = { message = it },
-                        selectedMode = selectedMode,
-                        onModeSelected = { selectedMode = it },
-                        onTransmit = {
-                            FirebaseMessaging.sendBroadcast(currentUserId, message, selectedMode)
-                            binaryData = DimensionLogic.encryptMessage(message)
-                            playbackMode = selectedMode
-                            screen = "PLAYBACK"
-                        },
-                        onGoToBroadcast = { screen = "BROADCAST" }
-                    )
-                    "BROADCAST" -> BroadcastScreen(
-                        messages = broadcastMessages,
-                        onPlaySignal = { msg ->
-                            binaryData = DimensionLogic.encryptMessage(msg.content)
-                            playbackMode = EncodeMode.valueOf(msg.mode)
-                            screen = "PLAYBACK"
+        if (screen == "STARTUP") {
+            StartupScreen()
+        } else {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Header(
+                    sanity = sanity, 
+                    showBack = screen != "LOGIN" && screen != "INPUT",
+                    onBack = { screen = "INPUT" },
+                    userId = currentUserId,
+                    onBroadcastClick = { screen = "BROADCAST" }
+                )
+                
+                Box(modifier = Modifier.weight(1f)) {
+                    when (screen) {
+                        "LOGIN" -> LoginScreen { id ->
+                            currentUserId = id
+                            screen = "INPUT"
                         }
-                    )
-                    "PLAYBACK" -> PlaybackScreen(
-                        binaryData = binaryData,
-                        mode = playbackMode,
-                        onFinished = { screen = "BROADCAST" }
-                    )
+                        "INPUT" -> InputScreen(
+                            message = message,
+                            onMessageChange = { message = it },
+                            selectedMode = selectedMode,
+                            onModeSelected = { selectedMode = it },
+                            onTransmit = {
+                                FirebaseMessaging.sendBroadcast(currentUserId, message, selectedMode)
+                                binaryData = DimensionLogic.encryptMessage(message)
+                                playbackMode = selectedMode
+                                screen = "PLAYBACK"
+                            },
+                            onGoToBroadcast = { screen = "BROADCAST" }
+                        )
+                        "BROADCAST" -> BroadcastScreen(
+                            messages = broadcastMessages,
+                            onPlaySignal = { msg ->
+                                binaryData = DimensionLogic.encryptMessage(msg.content)
+                                playbackMode = EncodeMode.valueOf(msg.mode)
+                                screen = "PLAYBACK"
+                            }
+                        )
+                        "PLAYBACK" -> PlaybackScreen(
+                            binaryData = binaryData,
+                            mode = playbackMode,
+                            onFinished = { screen = "BROADCAST" },
+                            toneGenerator = toneGenerator
+                        )
+                    }
                 }
             }
         }
 
         StaticNoiseOverlay()
         ScanlineOverlay()
+        MovingScanlineOverlay()
 
         if (isPossessed) {
             PossessedOverlay(onRecovered = {
@@ -178,6 +201,69 @@ fun DimensionDecoderApp() {
                 sanity = 100f
             })
         }
+    }
+}
+
+@Composable
+fun StartupScreen() {
+    val colorsTop = listOf(
+        Color(0xFFC0C0C0), Color(0xFFC0C000), Color(0xFF00C0C0), Color(0xFF00C000),
+        Color(0xFFC000C0), Color(0xFFC00000), Color(0xFF0000C0)
+    )
+    val colorsMid = listOf(
+        Color(0xFF0000C0), Color(0xFF131313), Color(0xFFC000C0), Color(0xFF131313),
+        Color(0xFF00C0C0), Color(0xFF131313), Color(0xFFC0C0C0)
+    )
+    val colorsBottom = listOf(
+        Color(0xFF002147), Color(0xFFFFFFFF), Color(0xFF32006A), Color(0xFF131313)
+    )
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(modifier = Modifier.weight(0.6f).fillMaxWidth()) {
+            colorsTop.forEach { color ->
+                Box(modifier = Modifier.weight(1f).fillMaxHeight().background(color))
+            }
+        }
+        Row(modifier = Modifier.weight(0.1f).fillMaxWidth()) {
+            colorsMid.forEach { color ->
+                Box(modifier = Modifier.weight(1f).fillMaxHeight().background(color))
+            }
+        }
+        Row(modifier = Modifier.weight(0.3f).fillMaxWidth()) {
+            colorsBottom.forEachIndexed { index, color ->
+                Box(modifier = Modifier.weight(if (index == 1) 1.5f else 1f).fillMaxHeight().background(color))
+            }
+        }
+    }
+}
+
+@Composable
+fun MovingScanlineOverlay() {
+    val infiniteTransition = rememberInfiniteTransition(label = "moving_scanline")
+    val yOffset by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1000f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(4000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "y_offset"
+    )
+
+    Canvas(modifier = Modifier.fillMaxSize().alpha(0.05f)) {
+        val lineY = (yOffset % size.height)
+        drawLine(
+            color = Color.White,
+            start = Offset(0f, lineY),
+            end = Offset(size.width, lineY),
+            strokeWidth = 20.dp.toPx()
+        )
+        drawLine(
+            color = Color.White,
+            start = Offset(0f, (lineY + 200.dp.toPx()) % size.height),
+            end = Offset(size.width, (lineY + 200.dp.toPx()) % size.height),
+            strokeWidth = 10.dp.toPx()
+        )
     }
 }
 
@@ -303,25 +389,34 @@ fun InputScreen(
             onValueChange = onMessageChange,
             textStyle = TextStyle(color = RetroCyan, fontFamily = FontFamily.Monospace, fontSize = 20.sp, textAlign = TextAlign.Center),
             modifier = Modifier.fillMaxWidth().border(1.dp, RetroCyan).padding(12.dp),
-            cursorBrush = androidx.compose.ui.graphics.SolidColor(RetroCyan),
-            decorationBox = { innerTextField ->
-                Box(contentAlignment = Alignment.Center) {
-                    if (message.isEmpty()) Text("TYPE MESSAGE...", color = RetroCyan.copy(alpha = 0.2f))
-                    innerTextField()
-                }
-            }
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(RetroCyan)
         )
 
-        Text("> SIGNAL TYPE:", color = RetroCyan, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("> SIGNAL TYPE:", color = RetroCyan, fontFamily = FontFamily.Monospace, fontSize = 16.sp)
+        Column(
+            horizontalAlignment = Alignment.Start,
+            modifier = Modifier.fillMaxWidth().padding(start = 32.dp)
+        ) {
             EncodeMode.values().forEach { mode ->
-                Box(
+                Row(
                     modifier = Modifier
-                        .border(1.dp, if (selectedMode == mode) RetroCyan else RetroCyan.copy(alpha = 0.3f))
                         .clickable { onModeSelected(mode) }
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(mode.name, color = if (selectedMode == mode) RetroCyan else RetroCyan.copy(alpha = 0.3f), fontSize = 10.sp)
+                    Text(
+                        if (selectedMode == mode) "[x]" else "[ ]",
+                        color = RetroCyan,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 20.sp
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        mode.name,
+                        color = if (selectedMode == mode) RetroCyan else RetroCyan.copy(alpha = 0.5f),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 18.sp
+                    )
                 }
             }
         }
@@ -385,7 +480,8 @@ fun BroadcastScreen(
 fun PlaybackScreen(
     binaryData: List<String>,
     mode: EncodeMode,
-    onFinished: () -> Unit
+    onFinished: () -> Unit,
+    toneGenerator: ToneGenerator
 ) {
     var currentBit by remember { mutableStateOf(' ') }
     var currentChunk by remember { mutableStateOf("") }
@@ -397,8 +493,15 @@ fun PlaybackScreen(
             for (bit in chunk) {
                 currentBit = bit
                 active = true
+                
+                // Play sound for all modes when signal is active
+                val toneType = if (bit == '1') ToneGenerator.TONE_DTMF_1 else ToneGenerator.TONE_DTMF_0
+                val duration = if (bit == '1') 400 else 150
+                toneGenerator.startTone(toneType, duration)
+                
                 delay(if (bit == '1') 600 else 250)
                 active = false
+                toneGenerator.stopTone()
                 delay(150)
             }
             delay(500)
