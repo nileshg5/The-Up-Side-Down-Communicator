@@ -1,10 +1,9 @@
 package com.example.theupsidedowncommunicator
 
-import com.google.firebase.Timestamp
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.Query
-import com.google.firebase.firestore.QuerySnapshot
-import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.database.DataSnapshot
+import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ValueEventListener
 
 data class MessageRecord(
     val from: String = "",
@@ -14,41 +13,72 @@ data class MessageRecord(
 )
 
 object FirebaseMessaging {
-    private val db: FirebaseFirestore by lazy { FirebaseFirestore.getInstance() }
-    private val broadcastCollection by lazy { db.collection("broadcast") }
+    // 1. Reference to the Realtime Database (the URL in your screenshot)
+    private val database = FirebaseDatabase.getInstance().reference
+    private val broadcastRef = database.child("broadcasts")
+    private val privateRef = database.child("private_messages")
 
     /**
-     * Sends a message to the Firestore "broadcast" collection.
+     * Sends a message to the GLOBAL broadcast feed.
      */
     fun sendBroadcast(fromUserId: String, content: String, mode: EncodeMode) {
-        val message = hashMapOf(
-            "from" to fromUserId,
-            "content" to content,
-            "mode" to mode.name,
-            "timestamp" to Timestamp.now()
+        val message = MessageRecord(
+            from = fromUserId,
+            content = content,
+            mode = mode.name,
+            timestamp = System.currentTimeMillis()
         )
-        
-        broadcastCollection.add(message)
+        // push() creates a unique ID so messages don't overwrite each other
+        broadcastRef.push().setValue(message)
     }
 
     /**
-     * Listens to the Firestore "broadcast" collection for real-time updates.
+     * Sends a PRIVATE message to a specific frequency (Target ID).
+     */
+    fun sendPrivateMessage(targetId: String, fromUserId: String, content: String, mode: EncodeMode) {
+        val message = MessageRecord(
+            from = fromUserId,
+            content = content,
+            mode = mode.name,
+            timestamp = System.currentTimeMillis()
+        )
+        // This saves it directly under the ID (e.g., private_messages/1234)
+        privateRef.child(targetId).setValue(message)
+    }
+
+    /**
+     * Listens for all broadcast messages in real-time.
      */
     fun fetchBroadcasts(onUpdate: (List<MessageRecord>) -> Unit) {
-        broadcastCollection
-            .orderBy("timestamp", Query.Direction.DESCENDING)
-            .addSnapshotListener { snapshot: QuerySnapshot?, e: FirebaseFirestoreException? ->
-                if (e != null || snapshot == null) return@addSnapshotListener
-                
-                val list = snapshot.documents.mapNotNull { doc ->
-                    val from = doc.getString("from") ?: ""
-                    val content = doc.getString("content") ?: ""
-                    val mode = doc.getString("mode") ?: "MORSE"
-                    val timestamp = doc.getTimestamp("timestamp")?.toDate()?.time ?: 0L
-                    
-                    MessageRecord(from, content, mode, timestamp)
-                }
+        broadcastRef.addValueEventListener(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val list = snapshot.children.mapNotNull {
+                    it.getValue(MessageRecord::class.java)
+                }.sortedByDescending { it.timestamp }
+
                 onUpdate(list)
             }
+
+            override fun onCancelled(error: DatabaseError) {
+                // Handle database errors here
+            }
+        })
+    }
+
+    /**
+     * Listens for private messages sent to YOUR ID.
+     */
+    fun listenForPrivateMessages(myId: String, onMessageReceived: (MessageRecord) -> Unit) {
+        privateRef.child(myId).addValueEventListener(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val msg = snapshot.getValue(MessageRecord::class.java)
+                if (msg != null) {
+                    onMessageReceived(msg)
+                    // Optional: clear message after receiving
+                    // privateRef.child(myId).removeValue()
+                }
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        })
     }
 }
